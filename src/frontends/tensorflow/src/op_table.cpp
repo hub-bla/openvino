@@ -8,7 +8,6 @@
 #include "openvino/op/abs.hpp"
 #include "openvino/op/acos.hpp"
 #include "openvino/op/acosh.hpp"
-#include "openvino/op/add.hpp"
 #include "openvino/op/asin.hpp"
 #include "openvino/op/asinh.hpp"
 #include "openvino/op/atan.hpp"
@@ -23,7 +22,6 @@
 #include "openvino/op/cos.hpp"
 #include "openvino/op/cosh.hpp"
 #include "openvino/op/divide.hpp"
-#include "openvino/op/equal.hpp"
 #include "openvino/op/erf.hpp"
 #include "openvino/op/exp.hpp"
 #include "openvino/op/floor.hpp"
@@ -44,7 +42,6 @@
 #include "openvino/op/minimum.hpp"
 #include "openvino/op/mish.hpp"
 #include "openvino/op/mod.hpp"
-#include "openvino/op/multiply.hpp"
 #include "openvino/op/negative.hpp"
 #include "openvino/op/not_equal.hpp"
 #include "openvino/op/power.hpp"
@@ -176,7 +173,7 @@ const std::map<std::string, CreatorFunction> get_supported_ops() {
         {"RightShift", CreatorFunction(translate_binary_op<v15::BitwiseRightShift>)},
         {"LeftShift", CreatorFunction(translate_binary_op<v15::BitwiseLeftShift>)},
         {"Div", CreatorFunction(translate_div_op)},
-        {"Equal", CreatorFunction(translate_binary_op<v1::Equal>)},
+        {"Equal", CreatorFunction(translate_equal_op)},
         {"FloorMod", CreatorFunction(translate_binary_op<v1::FloorMod>)},
         {"Greater", CreatorFunction(translate_binary_op<v1::Greater>)},
         {"GreaterEqual", CreatorFunction(translate_binary_op<v1::GreaterEqual>)},
