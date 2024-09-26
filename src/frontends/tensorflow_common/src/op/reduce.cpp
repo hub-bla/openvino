@@ -4,10 +4,13 @@
 
 #include "common_op_table.hpp"
 #include "helper_ops/complex_type_mark.hpp"
+#include "openvino/op/add.hpp"
+#include "openvino/op/broadcast.hpp"
 #include "openvino/op/concat.hpp"
 #include "openvino/op/equal.hpp"
 #include "openvino/op/gather.hpp"
 #include "openvino/op/logical_and.hpp"
+#include "openvino/op/multiply.hpp"
 #include "openvino/op/reduce_l2.hpp"
 #include "openvino/op/reduce_logical_and.hpp"
 #include "openvino/op/reduce_logical_or.hpp"
@@ -17,6 +20,9 @@
 #include "openvino/op/reduce_prod.hpp"
 #include "openvino/op/reduce_sum.hpp"
 #include "openvino/op/select.hpp"
+#include "openvino/op/shape_of.hpp"
+#include "openvino/op/subtract.hpp"
+#include "openvino/op/tensor_iterator.hpp"
 #include "openvino/op/unsqueeze.hpp"
 #include "utils.hpp"
 
@@ -73,32 +79,66 @@ OutputVector translate_prod_op(const NodeContext& node) {
         auto real_part = make_shared<v8::Gather>(input, gather_index_real, minus_one);
         auto imag_part = make_shared<v8::Gather>(input, gather_index_imag, minus_one);
 
-        auto const_zero = create_same_type_const_scalar<float>(real_part, 0.0f);
-        auto is_real_part_zero = make_shared<v1::Equal>(real_part, const_zero);
-        auto is_imag_part_zero = make_shared<v1::Equal>(imag_part, const_zero);
 
-        auto is_complex_number_zero = make_shared<v1::LogicalAnd>(is_real_part_zero, is_imag_part_zero);
+        auto const_one = make_shared<v0::Constant>(element::i64, Shape{}, 1);
+        auto const_zero = make_shared<v0::Constant>(element::i64, Shape{}, 0);
+        vector<int64_t> dims;
+        get_const_input(node, 1, &dims);
 
-        Output<Node> r, theta;
-        std::tie(r, theta) = complex_rectangular_to_polar(real_part, imag_part);
+        Output<Node> real_res, imag_res;
 
-        // theta for 0+0j will be nan but to make formula work properly it should be 0
-        theta = make_shared<v1::Select>(is_complex_number_zero, const_zero, theta);
+        for (int64_t ind = 0; ind < static_cast<int64_t>(dims.size()); ++ind){
+            auto temp_axis = make_shared<v0::Constant>(element::i64, Shape{}, dims[ind]);
+            auto temp_reduce = make_shared<v1::ReduceProd>(real_part, temp_axis);
 
-        // formula = e^( j * k ) * (r_0 * r_1 * ... * r_n)
-        // k = theta_0 + theta_1 + ... + theta_n
-        auto k = make_shared<v1::ReduceSum>(theta, axis, keep_dims);
-        auto new_r = make_shared<v1::ReduceProd>(r, axis, keep_dims);
+            auto temp_reduce_shape = make_shared<v0::ShapeOf>(temp_reduce);
 
-        Output<Node> new_real, new_imag;
-        std::tie(new_real, new_imag) = complex_polar_to_rectangular(new_r, k);
+            //c
+            auto real_param = make_shared<v0::Parameter>(real_part->get_element_type(), temp_reduce->get_shape());
+            //d
+            auto imag_param = make_shared<v0::Parameter>(real_part->get_element_type(), temp_reduce->get_shape());
 
-        auto real_unsqueeze = make_shared<v0::Unsqueeze>(new_real, minus_one);
-        auto imag_unsqueeze = make_shared<v0::Unsqueeze>(new_imag, minus_one);
+            //a
+            auto result_real_param = make_shared<v0::Parameter>(real_part->get_element_type(), temp_reduce->get_shape());
+            //b
+            auto result_imag_param = make_shared<v0::Parameter>(real_part->get_element_type(), temp_reduce->get_shape());
+
+            auto result_real_init = make_shared<v3::Broadcast>(const_one, temp_reduce_shape);
+            auto result_imag_init = make_shared<v3::Broadcast>(const_zero, temp_reduce_shape);
+
+            // (ac - bd) + i(ad + bc)
+
+            auto ac = make_shared<v1::Multiply>(result_real_param, real_param);
+
+            auto bd = make_shared<v1::Multiply>(result_imag_param, imag_param);
+
+            auto ad = make_shared<v1::Multiply>(result_real_param, imag_param);
+
+            auto bc = make_shared<v1::Multiply>(result_imag_param, real_param);
+
+            auto new_real = make_shared<v1::Subtract>(ac, bd);
+            auto new_imag = make_shared<v1::Add>(ad, bc);
+
+            auto iterator = make_shared<v0::TensorIterator>();
+
+            iterator->set_sliced_input(real_param, real_part, 0, 1, -1, -1, dims[ind]);
+            iterator->set_sliced_input(imag_param, imag_part, 0, 1, -1, -1, dims[ind]);
+            iterator->set_merged_input(result_real_param, result_real_init, new_real);
+            iterator->set_merged_input(result_imag_param, result_imag_init, new_imag);
+
+            auto body =
+                    std::make_shared<Model>(OutputVector{new_real, new_imag}, ParameterVector{real_param, imag_param, result_real_param, result_imag_param});
+
+            iterator->set_function(body);
+
+            real_res = iterator->get_iter_value(new_real, -1);
+            imag_res = iterator->get_iter_value(new_imag, -1);
+        }
+
+        auto real_unsqueeze = make_shared<v0::Unsqueeze>(real_res, minus_one);
+        auto imag_unsqueeze = make_shared<v0::Unsqueeze>(imag_res, minus_one);
 
         auto concat_result = make_shared<v0::Concat>(OutputVector{real_unsqueeze, imag_unsqueeze}, -1);
-        set_node_name(node.get_name(), concat_result);
-
         auto complex_result = make_shared<ComplexTypeMark>(concat_result, complex_part_type);
         return {complex_result};
     }
